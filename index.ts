@@ -22,6 +22,7 @@ const BATCH = Number(env("BATCH_PER_RUN") || 15);         // 매시 조회 상�
 const STALE_HOURS = Number(env("STALE_HOURS") || 3);      // 이 시간 지난 상품만 재조회
 const MAX_PER_USER = Number(env("MAX_PER_USER") || 10);   // 1인당 등록 상한
 
+const DISCLOSURE = "이 게시물은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.";
 const json = (o: unknown, s = 200) =>
   new Response(JSON.stringify(o), { status: s, headers: { ...cors, "Content-Type": "application/json" } });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -94,14 +95,17 @@ async function sendMail(to: string[], subject: string, html: string) {
   }
   throw new Error("메일 설정(GMAIL_USER·GMAIL_APP_PASSWORD)이 없습니다.");
 }
+const linkOf = (p: any) => p.partner_url || p.url || "";
 function mailBody(p: any, lines: string[]) {
+  const href = linkOf(p);
   return `<div style="font-family:sans-serif;line-height:1.6;max-width:520px">
+    <p style="margin:0 0 12px;padding-bottom:6px;border-bottom:2px solid #e3342f;font-size:13px">* ${DISCLOSURE}</p>
     ${p.image ? `<img src="${esc(p.image)}" width="96" style="float:right;margin-left:12px">` : ""}
     <h3 style="margin:0 0 6px">${esc(p.name)}</h3>
     ${lines.map((l) => `<p style="margin:4px 0">${l}</p>`).join("")}
     <p style="margin:10px 0 0;color:#555;font-size:13px">역대 최저 ${won(p.min_price)} · 역대 최고 ${won(p.max_price)} · 상품번호 ${esc(p.product_id)}</p>
-    <p>${p.url ? `<a href="${esc(p.url)}">쿠팡에서 보기</a>` : ""}${SITE_URL ? ` · <a href="${esc(SITE_URL)}">가격 그래프 보기</a>` : ""}</p>
-    <p style="color:#999;font-size:11px;clear:both">쿠팡 링크는 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받을 수 있습니다.</p></div>`;
+    <p>${href ? `<a href="${esc(href)}">쿠팡에서 보기</a>` : ""}${SITE_URL ? ` · <a href="${esc(SITE_URL)}">가격 그래프 보기</a>` : ""}</p>
+    <p style="clear:both"></p></div>`;
 }
 
 // ---------- 가격 반영 ----------
@@ -218,8 +222,26 @@ async function parseProduct(raw: string): Promise<{ id: string; url: string } | 
   return { id, url: `https://www.coupang.com/vp/products/${id}${keep ? "?" + keep : ""}` };
 }
 
+// ---------- 파트너스 링크 해석 ----------
+// 받는 형식: https://link.coupang.com/a/xxxx (단축 URL) / 파트너스 "이미지+텍스트" HTML 코드(<a href=…><img src=…>)
+function parsePartner(raw: string): { url: string; image?: string } | null | { error: string } {
+  const s = String(raw || "").trim();
+  if (!s) return null;
+  const href = s.match(/href\s*=\s*["']([^"']+)["']/i)?.[1] ?? s.match(/https?:\/\/[^\s"'<>]+/)?.[0] ?? s;
+  let u: URL;
+  try { u = new URL(href.startsWith("http") ? href : "https://" + href); } catch { return { error: "파트너스 링크 형식이 올바르지 않습니다." }; }
+  if (!/^(link\.coupang\.com|coupa\.ng)$/i.test(u.hostname))
+    return { error: "파트너스 링크는 쿠팡 파트너스 [링크 생성]에서 만든 link.coupang.com 주소여야 합니다." };
+  const img = s.match(/<img[^>]+src\s*=\s*["']([^"']+)["']/i)?.[1];
+  return { url: u.toString(), image: img && /^https:\/\//.test(img) ? img : undefined };
+}
+
 // ---------- 상품 등록 ----------
-async function addProduct(email: string, rawId: string, keywordRaw: string) {
+async function addProduct(email: string, rawId: string, keywordRaw: string, partnerRaw: string) {
+  // 상품번호 칸에 파트너스 링크를 넣은 경우도 파트너스 링크로 사용
+  if (!partnerRaw && /(link\.coupang\.com\/a\/|coupa\.ng\/)/i.test(String(rawId))) partnerRaw = rawId;
+  const partner = parsePartner(partnerRaw);
+  if (partner && "error" in partner) return json({ error: partner.error }, 400);
   const parsed = await parseProduct(rawId);
   if ("error" in parsed) return json({ error: parsed.error }, 400);
   const productId = parsed.id;
@@ -237,9 +259,13 @@ async function addProduct(email: string, rawId: string, keywordRaw: string) {
       catch (e) { note = (e as Error).message === "LIMIT" ? "조회 한도로 다음 자동 조회 때 확인합니다." : (e as Error).message; }
       if (!hit && !note) return json({ error: "검색어로 찾은 상위 10개 상품 중에 이 상품번호가 없습니다. 검색어를 더 구체적으로(브랜드·용량 포함) 바꿔 보십시오." }, 404);
     } else note = "쿠팡 API 키 등록 전이라 가격은 키 등록 후 자동 조회됩니다.";
-    await sb.from("cp_products").insert({ product_id: productId, name: hit?.name || keyword, keyword, url: parsed.url, last_status: hit ? "정상" : "조회 대기" });
+    await sb.from("cp_products").insert({ product_id: productId, name: hit?.name || keyword, keyword, url: parsed.url,
+      partner_url: partner?.url ?? null, image: partner?.image ?? null, last_status: hit ? "정상" : "조회 대기" });
     ({ data: p } = await sb.from("cp_products").select("*").eq("product_id", productId).single());
     if (hit) ({ product: p } = await applyPrice(p, hit));
+  } else if (partner && !p.partner_url) {
+    await sb.from("cp_products").update({ partner_url: partner.url, image: p.image || partner.image || null }).eq("product_id", productId);
+    p = { ...p, partner_url: partner.url, image: p.image || partner.image || null };
   }
   const { error } = await sb.from("cp_subs").upsert({ email, product_id: productId });
   if (error) throw error;
@@ -264,6 +290,13 @@ Deno.serve(async (req) => {
       return json(await cronRun());
     }
     if (b.action === "login") return await login(b.email, b.pin);
+    if (b.action === "public") {
+      const { data } = await sb.from("cp_products").select("product_id,name,image,url,partner_url,last_price,min_price")
+        .order("created_at", { ascending: false }).limit(30);
+      const items = (data ?? []).filter((p: any) => /link\.coupang\.com|coupa\.ng/.test(linkOf(p))).slice(0, 6)
+        .map((p: any) => ({ product_id: p.product_id, name: p.name, image: p.image, link: linkOf(p), last_price: p.last_price, min_price: p.min_price }));
+      return json({ disclosure: DISCLOSURE, items });
+    }
 
     const email = await sessionEmail(b.token);
     if (!email) return json({ error: "다시 로그인하십시오.", relogin: true }, 401);
@@ -275,10 +308,20 @@ Deno.serve(async (req) => {
         const { data: prods } = ids.length ? await sb.from("cp_products").select("*").in("product_id", ids) : { data: [] };
         const { data: hist } = ids.length ? await sb.from("cp_prices").select("product_id,price,checked_at").in("product_id", ids).order("checked_at") : { data: [] };
         const items = ids.map((id: string) => ({ ...(prods ?? []).find((p: any) => p.product_id === id), history: (hist ?? []).filter((h: any) => h.product_id === id).map((h: any) => ({ price: h.price, t: h.checked_at })) })).filter((x: any) => x.product_id);
-        return json({ email, hasApi: hasApi(), maxPerUser: MAX_PER_USER, items });
+        return json({ email, hasApi: hasApi(), maxPerUser: MAX_PER_USER, disclosure: DISCLOSURE, items });
       }
       case "add":
-        return await addProduct(email, b.product_id, b.keyword);
+        return await addProduct(email, b.product_id, b.keyword, b.partner);
+      case "update_partner": {
+        await sb.from("cp_subs").select("product_id").eq("email", email).eq("product_id", b.product_id).single().then(({ error }) => { if (error) throw new Error("등록되지 않은 상품입니다."); });
+        const pt = parsePartner(b.partner);
+        if (!pt) return json({ error: "파트너스 링크를 입력하십시오." }, 400);
+        if ("error" in pt) return json({ error: pt.error }, 400);
+        const upd: any = { partner_url: pt.url };
+        if (pt.image) upd.image = pt.image;
+        await sb.from("cp_products").update(upd).eq("product_id", b.product_id);
+        return json({ ok: true });
+      }
       case "update_keyword": {
         await sb.from("cp_subs").select("product_id").eq("email", email).eq("product_id", b.product_id).single().then(({ error }) => { if (error) throw new Error("등록되지 않은 상품입니다."); });
         await sb.from("cp_products").update({ keyword: String(b.keyword || "").trim(), last_checked: null, last_status: "검색어 변경 — 다음 자동 조회 대기" }).eq("product_id", b.product_id);

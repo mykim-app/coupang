@@ -19,7 +19,7 @@ button{font:inherit;border:0;border-radius:8px;padding:9px 16px;cursor:pointer;b
 button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
 button.sm{padding:5px 10px;font-size:13px}
 button:disabled{opacity:.5;cursor:default}
-.login{max-width:380px;margin:10vh auto}
+.login{max-width:420px;margin:18px auto 0}
 .login input{width:100%;margin-bottom:8px}
 .pin{letter-spacing:.6em;text-align:center;font-size:20px}
 .note{font-size:12px;color:var(--sub);margin-top:6px}
@@ -46,18 +46,42 @@ header{display:flex;justify-content:space-between;align-items:center;gap:10px;fl
 .empty{color:var(--sub);text-align:center;padding:26px}
 #toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--ink);color:var(--card);padding:10px 16px;border-radius:10px;font-size:14px;display:none;max-width:92vw;z-index:9}
 footer{font-size:11px;color:var(--sub);text-align:center;margin-top:28px}
+.disc{display:flex;align-items:flex-start;gap:6px;font-size:15px;padding:4px 0 8px;margin:0 0 18px;border-bottom:2px solid var(--acc)}
+.disc::before{content:"*";font-weight:700}
+.pcard{display:flex;align-items:stretch;border:1px solid var(--line);border-radius:6px;background:var(--card);overflow:hidden;text-decoration:none;color:inherit;max-width:560px;transition:box-shadow .15s}
+.pcard:hover{box-shadow:0 2px 10px rgba(0,0,0,.08)}
+.pcard .th{width:132px;min-height:112px;flex:none;display:flex;align-items:center;justify-content:center;background:#fff;border-right:1px solid var(--line)}
+.pcard .th img{max-width:118px;max-height:104px;object-fit:contain}
+.pcard .th span{font-size:12px;color:#999}
+.pcard .tx{padding:14px 18px;display:flex;flex-direction:column;justify-content:center;gap:4px;min-width:0}
+.pcard .t1{font-size:15px;font-weight:500;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.pcard .t2{font-size:13px;color:var(--sub);letter-spacing:.02em}
+.pcard .t3{font-size:13px;color:#2db400}
+.pcard .t4{font-size:13px;font-weight:600}
+.pgrid{display:grid;gap:10px}
+.intro h2{font-size:18px;margin:0 0 4px}
+.nolink{font-size:13px;color:var(--sub);background:var(--soft);border:1px dashed var(--line);border-radius:6px;padding:12px;max-width:560px}
+@media (max-width:480px){.pcard .th{width:96px;min-height:96px}.pcard .th img{max-width:86px;max-height:86px}.pcard .tx{padding:10px 12px}}
 </style>
 </head>
 <body>
 <div class="wrap">
+<p class="disc">이 게시물은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</p>
 
-<!-- 로그인 -->
-<div id="loginView" class="card login" style="display:none">
-  <h1>쿠팡 <b>가격 알림</b></h1>
+<!-- 공개 화면 + 로그인 -->
+<div id="loginView" style="display:none">
+  <div class="intro">
+    <h1>쿠팡 <b>가격 알림</b></h1>
+    <p class="meta" style="margin:4px 0 16px">쿠팡 상품의 가격 변동을 기록하고, 가격이 바뀌면 메일로 알려 드립니다.</p>
+  </div>
+  <div id="pubBox"></div>
+  <div class="card login">
+  <h2 style="font-size:17px;margin:0">내 알림 관리</h2>
   <p class="note" style="margin:6px 0 14px">이메일과 숫자 4자리로 들어갑니다.<br>처음 쓰는 이메일이면 지금 입력한 숫자 4자리가 그대로 등록됩니다.</p>
   <input id="email" type="email" placeholder="이메일 (알림 받을 주소)" autocomplete="email">
   <input id="pin" class="pin" type="password" inputmode="numeric" maxlength="4" placeholder="••••" autocomplete="current-password">
   <button id="loginBtn" style="width:100%">들어가기</button>
+  </div>
 </div>
 
 <!-- 내 상품 -->
@@ -72,15 +96,18 @@ footer{font-size:11px;color:var(--sub);text-align:center;margin-top:28px}
     <div class="row" style="margin-bottom:8px">
       <input id="pid" placeholder="쿠팡상품번호(예: 9145532845 - 26924074730) 또는 상품 주소">
     </div>
-    <div class="row">
+    <div class="row" style="margin-bottom:8px">
       <input id="kw" placeholder="검색어 (예: 제주삼다수 2L 12개)">
+    </div>
+    <div class="row">
+      <input id="partner" placeholder="쿠팡 파트너스 링크 (https://link.coupang.com/a/…) 또는 HTML 코드">
       <button id="addBtn">등록</button>
     </div>
-    <p class="note">쿠팡 API는 상품번호만으로 조회할 수 없어, 검색어로 찾은 상위 10개 중 같은 상품번호를 찾아 가격을 확인합니다. 브랜드·용량을 넣어 구체적으로 적어 주십시오. 등록하면 확인 메일을 보내고, 이후 가격이 바뀔 때마다 메일로 알려 드립니다.</p>
+    <p class="note">쿠팡 API는 상품번호만으로 조회할 수 없어, 검색어로 찾은 상위 10개 중 같은 상품번호를 찾아 가격을 확인합니다. 브랜드·용량을 넣어 구체적으로 적어 주십시오. 등록하면 확인 메일을 보내고, 이후 가격이 바뀔 때마다 메일로 알려 드립니다.<br>
+    <b>파트너스 링크</b>: 쿠팡 파트너스 → [링크 생성]에서 상품을 검색해 만든 단축 URL 또는 "이미지+텍스트" HTML 코드를 붙여 넣으면 상품 이미지와 함께 아래와 같은 링크 카드로 표시됩니다.</p>
   </div>
 
   <div id="list"></div>
-  <footer>이 페이지의 쿠팡 링크는 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받을 수 있습니다.</footer>
 </div>
 </div>
 <div id="toast"></div>
@@ -95,6 +122,23 @@ function toast(m,ms=3800){const t=$("#toast");t.textContent=m;t.style.display="b
 function sget(k){try{return localStorage.getItem(k)||""}catch(e){return ""}}
 function sset(k,v){try{v?localStorage.setItem(k,v):localStorage.removeItem(k)}catch(e){}}
 let TOKEN = sget("cpa_token"), charts = [], ITEMS = {};
+const linkOf = p => p.partner_url || p.link || p.url || "";
+function pcard(p, extra=""){
+  const href=linkOf(p);
+  if(!/link\.coupang\.com|coupa\.ng/.test(href)) return `<div class="nolink">파트너스 링크가 아직 없습니다. [파트너스 링크 등록]으로 추가하면 링크 카드가 표시됩니다.</div>`;
+  return `<a class="pcard" href="${esc(href)}" target="_blank" rel="sponsored noopener">
+    <div class="th">${p.image?`<img src="${esc(p.image)}" alt="${esc(p.name)}" loading="lazy">`:`<span>COUPANG</span>`}</div>
+    <div class="tx"><div class="t1">${esc(p.name)}</div><div class="t2">COUPANG</div><div class="t3">link.coupang.com</div>${extra}</div></a>`;
+}
+async function loadPublic(){
+  try{
+    const r=await fetch(FN,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"public"})}).then(r=>r.json());
+    const items=r.items||[];
+    $("#pubBox").innerHTML = items.length ? `<div class="card"><h2 style="font-size:16px;margin:0 0 4px">가격 알림 중인 상품</h2>
+      <p class="meta" style="margin:0 0 12px">더 자세한 정보는 아래 링크를 확인하세요.</p>
+      <div class="pgrid">${items.map(p=>pcard(p, p.last_price!=null?`<div class="t4">${won(p.last_price)}${p.min_price!=null&&p.min_price<p.last_price?` <span class="meta">(역대 최저 ${won(p.min_price)})</span>`:""}</div>`:"")).join("")}</div></div>` : "";
+  }catch(e){}
+}
 
 async function api(action, data={}){
   const r = await fetch(FN,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,token:TOKEN,...data})});
@@ -103,7 +147,7 @@ async function api(action, data={}){
   if(!r.ok || j.error) throw new Error(j.error || r.status);
   return j;
 }
-function show(v){ $("#loginView").style.display=v==="login"?"block":"none"; $("#mainView").style.display=v==="main"?"block":"none"; }
+function show(v){ if(v==="login") loadPublic(); $("#loginView").style.display=v==="login"?"block":"none"; $("#mainView").style.display=v==="main"?"block":"none"; }
 
 async function doLogin(){
   const email=$("#email").value.trim(), pin=$("#pin").value.trim();
@@ -135,9 +179,9 @@ function render(items, max){
     const h=p.history||[], prev=h.length>1?h[h.length-2].price:null, diff=prev!=null&&p.last_price!=null?p.last_price-prev:0;
     return `<div class="card">
       <div class="prod">
-        ${p.image?`<img src="${esc(p.image)}" alt="">`:""}
+        ${p.image&&!p.partner_url?`<img src="${esc(p.image)}" alt="">`:""}
         <div class="info">
-          <div class="nm"><a href="${esc(p.url||"#")}" target="_blank" rel="noopener">${esc(p.name)}</a></div>
+          <div class="nm"><a href="${esc(linkOf(p)||"#")}" target="_blank" rel="sponsored noopener">${esc(p.name)}</a></div>
           <div class="price"><b>${won(p.last_price)}</b>
             ${diff?`<span class="chg ${diff>0?"up":"down"}">${diff>0?"▲":"▼"} ${won(Math.abs(diff))}</span>`:""}
             ${p.last_price!=null&&p.last_price===p.min_price&&h.length>1?`<span class="chg down">역대 최저</span>`:""}</div>
@@ -149,9 +193,11 @@ function render(items, max){
           <div class="meta">상품번호 ${esc(p.product_id)} · 검색어 "${esc(p.keyword)}" · 마지막 확인 ${p.last_checked?fmt(p.last_checked):"-"} · ${esc(p.last_status||"")}</div>
         </div>
       </div>
+      <div style="margin-top:10px">${pcard(p)}</div>
       ${h.length?`<div class="chartbox"><canvas id="ch${i}"></canvas></div>`:`<div class="nochart">가격 기록이 쌓이면 그래프가 표시됩니다.</div>`}
       <div class="acts">
         <button class="ghost sm" onclick="editKw('${esc(p.product_id)}')">검색어 수정</button>
+        <button class="ghost sm" onclick="editPartner('${esc(p.product_id)}')">파트너스 링크 ${p.partner_url?"변경":"등록"}</button>
         <button class="ghost sm" onclick="removeP('${esc(p.product_id)}')">등록 해제</button>
       </div>
     </div>`;}).join("");
@@ -173,16 +219,20 @@ function render(items, max){
 }
 
 async function addP(){
-  const pid=$("#pid").value.trim(), kw=$("#kw").value.trim();
+  const pid=$("#pid").value.trim(), kw=$("#kw").value.trim(), partner=$("#partner").value.trim();
   if(!pid||!kw) return toast("상품번호와 검색어를 모두 입력하십시오.");
   $("#addBtn").disabled=true; toast("조회 중입니다…",10000);
-  try{ const r=await api("add",{product_id:pid,keyword:kw}); toast("등록했습니다."+(r.note?" "+r.note:""),6000); $("#pid").value=""; $("#kw").value=""; await load(); }
+  try{ const r=await api("add",{product_id:pid,keyword:kw,partner}); toast("등록했습니다."+(r.note?" "+r.note:""),6000); $("#pid").value=""; $("#kw").value=""; $("#partner").value=""; await load(); }
   catch(e){ toast(e.message,6000) }
   $("#addBtn").disabled=false;
 }
 async function editKw(id){
   const v=prompt("새 검색어 (브랜드·용량 포함)", ITEMS[id]?.keyword||""); if(!v||!v.trim()) return;
   try{ await api("update_keyword",{product_id:id,keyword:v.trim()}); toast("저장했습니다. 다음 자동 조회 때 반영됩니다."); await load(); }catch(e){toast(e.message)}
+}
+async function editPartner(id){
+  const v=prompt("쿠팡 파트너스 링크(https://link.coupang.com/a/…) 또는 '이미지+텍스트' HTML 코드를 붙여 넣으십시오.", ITEMS[id]?.partner_url||""); if(!v||!v.trim()) return;
+  try{ await api("update_partner",{product_id:id,partner:v.trim()}); toast("파트너스 링크를 저장했습니다."); await load(); }catch(e){toast(e.message)}
 }
 async function removeP(id){
   if(!confirm("이 상품을 내 목록에서 빼고 알림을 끕니다.")) return;
@@ -194,6 +244,7 @@ $("#pin").onkeydown=e=>{ if(e.key==="Enter") doLogin(); };
 $("#pin").oninput=e=>{ e.target.value=e.target.value.replace(/\D/g,"").slice(0,4); };
 $("#addBtn").onclick=addP;
 $("#kw").onkeydown=e=>{ if(e.key==="Enter") addP(); };
+$("#partner").onkeydown=e=>{ if(e.key==="Enter") addP(); };
 $("#logoutBtn").onclick=async()=>{ try{await api("logout")}catch(e){} sset("cpa_token"); TOKEN=""; show("login"); };
 $("#email").value=sget("cpa_email");
 if(TOKEN) load().catch(()=>show("login")); else show("login");

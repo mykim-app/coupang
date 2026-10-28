@@ -30,6 +30,7 @@ create table if not exists cp_products (
   name         text not null,
   keyword      text not null,
   url          text,
+  partner_url  text,                       -- 쿠팡 파트너스 링크(link.coupang.com)
   image        text,
   last_price   integer,
   min_price    integer,
