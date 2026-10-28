@@ -18,31 +18,53 @@
 2. 보안 화면에서 **앱 비밀번호** 검색 → 이름(예: 쿠팡알림) 입력 → 16자리 비밀번호 복사
 > 여러 사람에게 메일을 보내야 하므로 Gmail로 바꿨습니다. Resend는 도메인 인증 전에는 가입자 본인에게만 보낼 수 있습니다.
 
-## 2단계. Supabase Secrets 등록
-Edge Functions > **Secrets** 에서 추가합니다.
+## 2단계. Supabase Secrets(비밀값) 등록
+1. supabase.com 로그인 → 프로젝트(`vewmmndhipvazzmttzzr`) 선택
+2. 왼쪽 메뉴 **Edge Functions** → 하위 메뉴 **Secrets**
+3. **Name** / **Value** 칸에 아래 값을 하나씩 넣고 **Save**(또는 Add another 후 한꺼번에 Save)
 
-| 이름 | 값 | 시점 |
+| Name (그대로 입력) | Value | 시점 |
 |---|---|---|
-| CRON_SECRET | 자동 조회용 암호(직접 정함) | 지금 |
-| PIN_PEPPER | 아무 긴 문자열(직접 정함, **한 번 정하면 바꾸지 말 것**) | 지금 |
-| GMAIL_USER | 보내는 Gmail 주소 | 지금 |
-| GMAIL_APP_PASSWORD | 1단계 16자리 앱 비밀번호 | 지금 |
-| SITE_URL | GitHub Pages 주소(메일의 "그래프 보기" 링크) | 5단계 후 |
-| COUPANG_ACCESS_KEY / COUPANG_SECRET_KEY | 쿠팡 파트너스 키 | **API 발급 후** |
+| CRON_SECRET | 자동 조회용 암호. 영문+숫자 20자 정도 임의로 (예: `cpAuto2026xQ7mP4rT9`) | 지금 |
+| PIN_PEPPER | 숫자 4자리 암호화용 임의 문자열. **한 번 정하면 바꾸지 말 것**(바꾸면 기존 사용자 로그인 불가) | 지금 |
+| GMAIL_USER | 1단계 Gmail 주소 | 지금 |
+| GMAIL_APP_PASSWORD | 1단계 16자리(띄어쓰기 없이) | 지금 |
+| SITE_URL | 5단계에서 생기는 GitHub Pages 주소 | 5단계 후 |
+| COUPANG_ACCESS_KEY / COUPANG_SECRET_KEY | 쿠팡 파트너스 키 | API 발급 후 |
 
-이전 시험판의 ADMIN_PASSWORD·RESEND_API_KEY·ALERT_EMAIL은 더 이상 쓰지 않으므로 지워도 됩니다.
+CRON_SECRET 값은 4단계에서 한 번 더 쓰므로 메모장에 적어 두십시오. 이전 시험판의 ADMIN_PASSWORD·RESEND_API_KEY·ALERT_EMAIL은 지워도 됩니다.
 
-## 3단계. 함수 교체
-1. Edge Functions > `coupang-price`(없으면 **Deploy a new function > Via Editor**로 같은 이름 생성)
-2. `index.ts` 전체 붙여 넣기 → **Deploy**
-3. 함수 Settings에서 **Verify JWT 끄기** 유지
+## 3단계. 함수 만들기
+1. 왼쪽 메뉴 **Edge Functions** → **Deploy a new function** → **Via Editor**
+2. 함수 이름을 정확히 `coupang-price` 로 입력(이름이 다르면 화면이 함수를 찾지 못함)
+3. 편집기의 예시 코드를 모두 지우고 `index.ts` 내용 전체를 붙여 넣기 → 아래 **Deploy function** → 성공 메시지 확인(10~30초)
+4. 함수 목록에서 `coupang-price` 클릭 → 설정 화면에서 **JWT 검증**(Enforce JWT Verification / Verify JWT) 항목을 **끄기** → 저장
+   - 이 화면은 비밀번호 대신 이메일+4자리로 보호하므로 끕니다. 끄지 않으면 화면에서 "응답 오류 (401)"이 납니다.
+5. 나중에 코드를 고칠 때는 함수 클릭 → Code에서 붙여 넣기 → **Deploy updates**
 
-## 4단계. 표 만들기
-SQL Editor > New query → `setup.sql` 붙여 넣기 → 맨 아래 `여기에_CRON_SECRET` 을 2단계 값으로 바꾸고 **Run**
-(맨 위에서 이전 시험판 표를 지우고 새로 만듭니다)
+## 4단계. 표 만들기와 자동 조회 예약
+1. 왼쪽 메뉴 **SQL Editor** → **New query**(+)
+2. `setup.sql` 내용 전체 붙여 넣기
+3. 맨 아래의 `여기에_CRON_SECRET` 글자만 2단계 CRON_SECRET 값으로 바꾸기 (따옴표는 그대로)
+4. 오른쪽 아래 **Run** → "Success" 확인. 파괴적 작업 경고 창이 뜨면 이전 시험판 표 삭제 때문이므로 **Run this query** 선택
+5. 확인: 왼쪽 **Table Editor**에 `cp_users`, `cp_products`, `cp_prices`, `cp_subs` 등이 보이면 정상
 
-## 5단계. 화면 올리기
-GitHub 저장소에 `index.html` 업로드 → Settings > Pages → `main`/`(root)` → Save → 주소로 접속
+## 5단계. 화면 올리기(GitHub Pages)
+1. github.com 로그인 → 오른쪽 위 **+** → **New repository** → 이름 `coupang-alert`, **Public** 선택 → **Create repository**
+2. 새 저장소 화면에서 **uploading an existing file** 링크(또는 Add file → Upload files) → `index.html`, `README.md` 끌어다 놓기 → **Commit changes**
+   - `index.ts`, `setup.sql`은 Supabase에 이미 넣었으므로 올리지 않아도 됩니다(보관용으로 올려도 무방, 비밀값은 들어 있지 않음)
+3. 저장소 **Settings** → 왼쪽 **Pages** → Branch를 `main`, 폴더 `/(root)` → **Save**
+4. 1~2분 뒤 같은 화면 위쪽에 `https://(GitHub아이디).github.io/coupang-alert/` 주소가 나타남
+5. 이 주소를 2단계 **SITE_URL** Secret에 추가(메일의 "가격 그래프 보기" 링크용)
+
+## 6단계. 동작 확인
+| 확인 | 방법 | 정상 결과 |
+|---|---|---|
+| 로그인 | Pages 주소 접속 → 이메일 + 숫자 4자리 → 들어가기 | "처음 오셨습니다" 안내 후 빈 목록 |
+| 등록·메일 | 상품번호 + 검색어 입력 → 등록 | "등록했습니다" + 등록 확인 메일 수신 |
+| 자동 조회 | SQL Editor에서 `select * from cron.job_run_details order by start_time desc limit 5;` 실행 | status가 succeeded |
+
+API 키 발급 전에는 등록 시 "가격은 키 등록 후 자동 조회됩니다"가 정상입니다. 메일이 오지 않으면 화면의 "등록 메일 발송 실패: …" 문구를 알려 주십시오.
 
 ## 자동 조회 방식과 한도
 | 항목 | 기본값 | 바꾸려면(Secrets) |
