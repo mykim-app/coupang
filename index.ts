@@ -193,11 +193,34 @@ async function sessionEmail(token: string) {
   return data.email as string;
 }
 
+// ---------- 상품번호 해석 ----------
+// 받는 형식: 숫자만 / PC 주소(…/vp/products/번호?itemId=…&vendorItemId=…) / 앱 공유 짧은 주소(link.coupang.com/a/…, coupa.ng/…)
+async function parseProduct(raw: string): Promise<{ id: string; url: string } | { error: string }> {
+  let s = String(raw || "").trim();
+  if (/^\d{5,}$/.test(s)) return { id: s, url: `https://www.coupang.com/vp/products/${s}` };
+  if (/^(https?:\/\/)?(link\.coupang\.com|coupa\.ng)\//i.test(s)) {           // 짧은 주소 → 실제 주소 따라가기
+    let u = s.startsWith("http") ? s : "https://" + s;
+    for (let i = 0; i < 4 && !/\/vp\/products\/\d+|[?&]pageKey=\d+/.test(u); i++) {
+      const r = await fetch(u, { redirect: "manual" }).catch(() => null);
+      const loc = r?.headers.get("location");
+      if (!loc) break;
+      u = new URL(loc, u).toString();
+    }
+    s = u;
+  }
+  const id = s.match(/\/vp\/products\/(\d+)/)?.[1] ?? s.match(/[?&]pageKey=(\d+)/)?.[1];
+  if (!id) return { error: "상품번호를 찾지 못했습니다. PC 쿠팡 상품 페이지 주소(…/vp/products/숫자…)를 그대로 붙여 넣거나, 주소 속 products/ 뒤의 숫자만 입력하십시오." };
+  const q = new URLSearchParams(s.split("?")[1] || "");
+  const keep = ["itemId", "vendorItemId"].filter((k) => /^\d+$/.test(q.get(k) || "")).map((k) => `${k}=${q.get(k)}`).join("&");
+  return { id, url: `https://www.coupang.com/vp/products/${id}${keep ? "?" + keep : ""}` };
+}
+
 // ---------- 상품 등록 ----------
 async function addProduct(email: string, rawId: string, keywordRaw: string) {
-  const productId = String(rawId || "").match(/products\/(\d+)/)?.[1] ?? String(rawId || "").replace(/\D/g, "");
+  const parsed = await parseProduct(rawId);
+  if ("error" in parsed) return json({ error: parsed.error }, 400);
+  const productId = parsed.id;
   const keyword = String(keywordRaw || "").trim();
-  if (!productId) return json({ error: "쿠팡 상품번호(또는 상품 주소)를 입력하십시오." }, 400);
   if (!keyword) return json({ error: "검색어(상품명)를 입력하십시오. 쿠팡 API는 상품번호만으로 조회할 수 없습니다." }, 400);
   const { count } = await sb.from("cp_subs").select("product_id", { count: "exact", head: true }).eq("email", email);
   if ((count ?? 0) >= MAX_PER_USER) return json({ error: `1인당 ${MAX_PER_USER}개까지 등록할 수 있습니다.` }, 400);
@@ -211,7 +234,7 @@ async function addProduct(email: string, rawId: string, keywordRaw: string) {
       catch (e) { note = (e as Error).message === "LIMIT" ? "조회 한도로 다음 자동 조회 때 확인합니다." : (e as Error).message; }
       if (!hit && !note) return json({ error: "검색어로 찾은 상위 10개 상품 중에 이 상품번호가 없습니다. 검색어를 더 구체적으로(브랜드·용량 포함) 바꿔 보십시오." }, 404);
     } else note = "쿠팡 API 키 등록 전이라 가격은 키 등록 후 자동 조회됩니다.";
-    await sb.from("cp_products").insert({ product_id: productId, name: hit?.name || keyword, keyword, url: `https://www.coupang.com/vp/products/${productId}`, last_status: hit ? "정상" : "조회 대기" });
+    await sb.from("cp_products").insert({ product_id: productId, name: hit?.name || keyword, keyword, url: parsed.url, last_status: hit ? "정상" : "조회 대기" });
     ({ data: p } = await sb.from("cp_products").select("*").eq("product_id", productId).single());
     if (hit) ({ product: p } = await applyPrice(p, hit));
   }
