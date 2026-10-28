@@ -63,13 +63,16 @@ async function coupangSearch(keyword: string) {
   const j = await r.json().catch(() => ({}));
   if (String(j.rCode) !== "0") throw new Error(`쿠팡 API 오류: ${j.rMessage || j.message || r.status}`);
   return (j.data?.productData ?? []).map((p: any) => ({
-    product_id: String(p.productId), name: p.productName, price: Number(p.productPrice), image: p.productImage, url: p.productUrl,
+    api_id: String(p.productId),                                            // API 내부 상품 ID
+    page_key: (String(p.productUrl || "").match(/[?&]pageKey=(\d+)/) || [])[1] ?? "", // 쿠팡 주소(/vp/products/번호)의 번호
+    name: p.productName, price: Number(p.productPrice), image: p.productImage, url: p.productUrl,
   }));
 }
-// 상품번호로 찾기: 검색어 결과(상위 10개) 중 같은 상품번호
+// 상품번호로 찾기: 검색어 결과(상위 10개) 중 주소 번호(pageKey) 또는 API ID가 같은 상품
+// ※ 공식 문서 예시에서 productId(27664441)와 주소 번호(pageKey=319834306)가 서로 다름
 async function lookup(productId: string, keyword: string) {
   const items = await coupangSearch(keyword);
-  return items.find((x: any) => x.product_id === productId) ?? null;
+  return items.find((x: any) => x.page_key === productId) ?? items.find((x: any) => x.api_id === productId) ?? null;
 }
 
 // ---------- 메일 (Gmail 우선, 없으면 Resend) ----------
