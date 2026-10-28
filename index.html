@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>쿠팡 가격 알림</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--ink:#1d2330;--sub:#6b7385;--line:#e3e6ec;--acc:#e3342f;--acc2:#1f6feb;--ok:#14845a;--warn:#b7791f}
+@media (prefers-color-scheme:dark){:root{--bg:#12151b;--card:#1b1f27;--ink:#e8ebf1;--sub:#9aa3b5;--line:#2b313d;--acc:#ff5a52;--acc2:#4d8ff5;--ok:#3bbf8a;--warn:#e0a84a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 "Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:20px 16px 60px}
+header{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:14px}
+h1{font-size:22px;margin:0}h1 b{color:var(--acc)}
+.badges{display:flex;gap:6px;flex-wrap:wrap}
+.bdg{font-size:12px;padding:3px 9px;border-radius:99px;border:1px solid var(--line);color:var(--sub)}
+.bdg.on{color:var(--ok);border-color:var(--ok)}.bdg.off{color:var(--warn);border-color:var(--warn)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input,select{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0}
+input{flex:1 1 160px}
+button{font:inherit;border:0;border-radius:8px;padding:8px 14px;cursor:pointer;background:var(--acc2);color:#fff;white-space:nowrap}
+button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+button.red{background:var(--acc)}
+button:disabled{opacity:.5;cursor:default}
+.tabs{display:flex;gap:4px;margin-bottom:12px}
+.tabs button{background:transparent;color:var(--sub);border:1px solid var(--line)}
+.tabs button.act{background:var(--ink);color:var(--card)}
+.res{display:grid;gap:8px;margin-top:10px}
+.ritem{display:flex;gap:10px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:8px}
+.ritem img,.prod img{width:56px;height:56px;object-fit:contain;border-radius:8px;background:#fff;flex:none}
+.ritem .nm{flex:1;min-width:0;font-size:14px}
+.prods{display:grid;gap:12px}
+.prod{display:flex;gap:12px;align-items:flex-start}
+.prod .info{flex:1;min-width:0}
+.prod .nm{font-weight:600;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.prices{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:6px;margin:8px 0}
+.prices div{background:var(--bg);border-radius:8px;padding:6px 8px}
+.prices small{display:block;color:var(--sub);font-size:12px}
+.prices b{font-size:16px}.low b{color:var(--acc)}
+.meta{font-size:12px;color:var(--sub)}
+.acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.acts button{padding:5px 10px;font-size:13px}
+.detail{margin-top:10px;border-top:1px dashed var(--line);padding-top:10px;display:none}
+.detail.show{display:block}
+.chartbox{position:relative;height:220px}
+table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
+th,td{border-bottom:1px solid var(--line);padding:5px;text-align:right}th:first-child,td:first-child{text-align:left}
+.empty{color:var(--sub);text-align:center;padding:24px}
+.login{max-width:360px;margin:12vh auto}
+#toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--ink);color:var(--card);padding:10px 16px;border-radius:10px;font-size:14px;display:none;max-width:90vw;z-index:9}
+.note{font-size:12px;color:var(--sub);margin-top:6px}
+footer{font-size:12px;color:var(--sub);text-align:center;margin-top:30px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div id="loginView" class="card login">
+  <h1>쿠팡 <b>가격 알림</b></h1>
+  <p class="meta">관리자 비밀번호를 입력하십시오.</p>
+  <div class="row"><input id="pw" type="password" placeholder="비밀번호"><button id="loginBtn">들어가기</button></div>
+</div>
+
+<div id="mainView" style="display:none">
+  <header>
+    <h1>쿠팡 <b>가격 알림</b></h1>
+    <div class="badges"><span id="bApi" class="bdg">API</span><span id="bMail" class="bdg">메일</span></div>
+    <div class="row">
+      <button class="ghost" id="checkBtn">지금 가격 확인</button>
+      <button class="ghost" id="mailBtn">테스트 메일</button>
+      <button class="ghost" id="logoutBtn">나가기</button>
+    </div>
+  </header>
+
+  <div class="card">
+    <div class="tabs"><button data-t="search" class="act">쿠팡에서 검색</button><button data-t="manual">직접 등록</button></div>
+    <div id="tSearch">
+      <div class="row"><input id="kw" placeholder="상품명 검색 (예: 삼다수 2L)"><button id="searchBtn">검색</button></div>
+      <div class="note" id="searchNote"></div>
+      <div class="res" id="res"></div>
+    </div>
+    <div id="tManual" style="display:none">
+      <div class="row" style="margin-bottom:8px"><input id="mUrl" placeholder="쿠팡 상품 주소 (…/vp/products/숫자…)"></div>
+      <div class="row" style="margin-bottom:8px"><input id="mName" placeholder="상품명"><input id="mKw" placeholder="자동 조회용 검색어(비우면 상품명)"></div>
+      <div class="row"><input id="mPrice" type="number" placeholder="현재 가격(원, 선택)"><input id="mTarget" type="number" placeholder="목표가(원, 선택)"><button id="mAdd">등록</button></div>
+      <p class="note">API 키 발급 전에도 등록해 둘 수 있습니다. 키가 등록되면 검색어로 조회해 같은 상품번호의 가격을 자동 기록합니다.</p>
+    </div>
+  </div>
+
+  <div class="prods" id="prods"></div>
+  <footer>이 페이지의 쿠팡 링크는 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받을 수 있습니다.</footer>
+</div>
+</div>
+<div id="toast"></div>
+
+<script>
+const FN = "https://vewmmndhipvazzmttzzr.supabase.co/functions/v1/coupang-price";
+let TOKEN = "", charts = {};
+const $ = s => document.querySelector(s);
+const won = n => n == null ? "-" : Number(n).toLocaleString("ko-KR") + "원";
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtT = t => t ? new Date(t).toLocaleString("ko-KR",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"}) : "-";
+function toast(m){const t=$("#toast");t.textContent=m;t.style.display="block";clearTimeout(t._h);t._h=setTimeout(()=>t.style.display="none",3500)}
+function store(k,v){try{v===undefined?localStorage.removeItem(k):localStorage.setItem(k,v)}catch(e){}}
+function load(k){try{return localStorage.getItem(k)||""}catch(e){return ""}}
+
+async function api(action, data={}){
+  const r = await fetch(FN,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,token:TOKEN,...data})});
+  const j = await r.json().catch(()=>({error:"응답을 읽을 수 없습니다 ("+r.status+")"}));
+  if(!r.ok || j.error) throw new Error(j.error || r.status);
+  return j;
+}
+
+async function login(pw){
+  TOKEN = pw;
+  try{
+    const s = await api("ping");
+    store("cp_token",pw);
+    $("#loginView").style.display="none"; $("#mainView").style.display="block";
+    setBadge("#bApi", s.hasApiKey, "쿠팡 API 연결됨", "쿠팡 API 키 대기");
+    setBadge("#bMail", s.hasMail, "메일 설정됨"+(s.defaultEmail?" ("+s.defaultEmail+")":""), "메일 미설정");
+    $("#searchNote").textContent = s.hasApiKey ? "검색 결과에서 [추적]을 누르면 등록됩니다. 쿠팡 API 호출 제한이 있어 검색은 꼭 필요할 때만 하십시오." : "API 키 발급 전입니다. [직접 등록] 탭으로 상품을 먼저 등록해 두십시오.";
+    $("#searchBtn").disabled = !s.hasApiKey;
+    refresh();
+  }catch(e){ TOKEN=""; store("cp_token"); $("#loginView").style.display="block"; $("#mainView").style.display="none"; toast(e.message); }
+}
+function setBadge(sel,on,a,b){const e=$(sel);e.className="bdg "+(on?"on":"off");e.textContent=on?a:b}
+
+async function refresh(){
+  const {items} = await api("list");
+  const box = $("#prods");
+  if(!items.length){box.innerHTML='<div class="card empty">추적 중인 상품이 없습니다. 위에서 상품을 등록하십시오.</div>';return}
+  box.innerHTML = items.map(p=>`
+  <div class="card" id="c_${esc(p.product_id)}">
+    <div class="prod">
+      ${p.image?`<img src="${esc(p.image)}" alt="">`:""}
+      <div class="info">
+        <div class="nm">${p.url?`<a href="${esc(p.url)}" target="_blank" rel="noopener" style="color:inherit">${esc(p.name)}</a>`:esc(p.name)}</div>
+        <div class="prices">
+          <div><small>현재가</small><b>${won(p.last_price)}</b></div>
+          <div class="low"><small>역대 최저가</small><b>${won(p.min_price)}</b></div>
+          <div><small>목표가</small><b>${won(p.target_price)}</b></div>
+        </div>
+        <div class="meta">상품번호 ${esc(p.product_id)} · 검색어 "${esc(p.keyword)}" · 마지막 확인 ${fmtT(p.last_checked)} · ${esc(p.last_status||"기록 없음")} ${p.active?"":"· <b>일시중지</b>"}</div>
+        <div class="acts">
+          <button class="ghost" onclick="toggleDetail('${esc(p.product_id)}')">가격 기록</button>
+          <button class="ghost" onclick="editP('${esc(p.product_id)}')">설정</button>
+          <button class="ghost" onclick="manualP('${esc(p.product_id)}')">가격 직접 입력</button>
+          <button class="ghost" onclick="pauseP('${esc(p.product_id)}',${!p.active})">${p.active?"일시중지":"재개"}</button>
+          <button class="red" onclick="delP('${esc(p.product_id)}')">삭제</button>
+        </div>
+        <div class="detail" id="d_${esc(p.product_id)}"></div>
+      </div>
+    </div>
+  </div>`).join("");
+  window._items = Object.fromEntries(items.map(p=>[p.product_id,p]));
+}
+
+async function toggleDetail(id){
+  const d = $("#d_"+CSS.escape(id));
+  if(d.classList.toggle("show")===false) return;
+  d.innerHTML = '<div class="meta">불러오는 중…</div>';
+  const {items} = await api("history",{product_id:id});
+  if(!items.length){d.innerHTML='<div class="meta">아직 기록이 없습니다.</div>';return}
+  d.innerHTML = `<div class="chartbox"><canvas></canvas></div>
+    <table><tr><th>일시</th><th>가격</th><th>구분</th></tr>
+    ${items.slice().reverse().slice(0,30).map(h=>`<tr><td>${fmtT(h.checked_at)}</td><td>${won(h.price)}</td><td>${h.source==="api"?"자동":"직접"}</td></tr>`).join("")}</table>`;
+  const css = getComputedStyle(document.documentElement);
+  if(charts[id]) charts[id].destroy();
+  charts[id] = new Chart(d.querySelector("canvas"),{type:"line",
+    data:{labels:items.map(h=>fmtT(h.checked_at)),datasets:[{data:items.map(h=>h.price),borderColor:css.getPropertyValue("--acc").trim(),backgroundColor:"transparent",tension:.25,pointRadius:3,stepped:false}]},
+    options:{maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>won(c.parsed.y)}}},
+      scales:{y:{ticks:{callback:v=>v.toLocaleString("ko-KR")}}}}});
+}
+
+async function editP(id){
+  const p = window._items[id];
+  const kw = prompt("자동 조회용 검색어", p.keyword); if(kw===null) return;
+  const tg = prompt("목표가(원, 비우면 없음)", p.target_price??""); if(tg===null) return;
+  const em = prompt("알림 받을 메일(비우면 기본 메일)", p.email??""); if(em===null) return;
+  await run(()=>api("update",{product_id:id,keyword:kw.trim()||p.name,target_price:tg.replace(/[^0-9]/g,""),email:em.trim()}),"저장했습니다.");
+}
+async function manualP(id){
+  const v = prompt("가격(원)을 입력하십시오. 테스트·보정용입니다."); if(!v) return;
+  await run(async()=>{const r=await api("manual",{product_id:id,price:v.replace(/[^0-9]/g,"")});return r},null,r=>toast(r.reasons?.length?"기록 + "+r.status:"기록했습니다."));
+}
+async function pauseP(id,active){await run(()=>api("update",{product_id:id,active}),active?"재개했습니다.":"일시중지했습니다.")}
+async function delP(id){ if(confirm("이 상품과 가격 기록을 모두 삭제합니다.")) await run(()=>api("delete",{product_id:id}),"삭제했습니다.") }
+async function run(fn,msg,after){try{const r=await fn();if(msg)toast(msg);if(after)after(r);await refresh()}catch(e){toast(e.message)}}
+
+// 검색 등록
+let _found=[];
+$("#searchBtn").onclick = async ()=>{
+  const kw=$("#kw").value.trim(); if(!kw) return;
+  $("#searchBtn").disabled=true; $("#res").innerHTML='<div class="meta">검색 중…</div>';
+  try{
+    const {items}=await api("search",{keyword:kw}); _found=items;
+    $("#res").innerHTML = items.length? items.map((x,i)=>`
+      <div class="ritem">${x.image?`<img src="${esc(x.image)}" alt="">`:""}
+      <div class="nm">${esc(x.name)}<div class="meta">${won(x.price)}${x.rocket?" · 로켓배송":""} · ${esc(x.product_id)}</div></div>
+      <button onclick="addFound(${i})">추적</button></div>`).join("") : '<div class="meta">검색 결과가 없습니다.</div>';
+  }catch(e){$("#res").innerHTML="";toast(e.message)}
+  $("#searchBtn").disabled=false;
+};
+async function addFound(i){
+  const x=_found[i]; const tg=prompt("목표가(원, 선택)","");
+  await run(()=>api("add",{product:{...x,keyword:$("#kw").value.trim(),target_price:(tg||"").replace(/[^0-9]/g,""),source:"api"}}),"추적을 시작했습니다.");
+}
+
+// 직접 등록
+$("#mAdd").onclick = async ()=>{
+  const url=$("#mUrl").value.trim(), m=url.match(/products\/(\d+)/);
+  const name=$("#mName").value.trim();
+  if(!m) return toast("쿠팡 상품 주소에서 상품번호를 찾지 못했습니다.");
+  if(!name) return toast("상품명을 입력하십시오.");
+  await run(()=>api("add",{product:{product_id:m[1],name,keyword:$("#mKw").value.trim()||name,url:url.split("?")[0],
+    price:$("#mPrice").value,target_price:$("#mTarget").value,source:"manual"}}),"등록했습니다.");
+  ["#mUrl","#mName","#mKw","#mPrice","#mTarget"].forEach(s=>$(s).value="");
+};
+
+document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("act",x===b));
+  $("#tSearch").style.display=b.dataset.t==="search"?"":"none";
+  $("#tManual").style.display=b.dataset.t==="manual"?"":"none";
+});
+$("#checkBtn").onclick=async()=>{ $("#checkBtn").disabled=true; toast("가격 확인 중… 상품 수에 따라 시간이 걸립니다.");
+  await run(()=>api("check"),null,r=>toast(r.skipped?r.message:`확인 완료 (${r.results.length}개)`)); $("#checkBtn").disabled=false; };
+$("#mailBtn").onclick=()=>run(()=>api("testmail"),"테스트 메일을 보냈습니다.");
+$("#logoutBtn").onclick=()=>{store("cp_token");location.reload()};
+$("#loginBtn").onclick=()=>login($("#pw").value);
+$("#pw").onkeydown=e=>{if(e.key==="Enter")login($("#pw").value)};
+$("#kw").onkeydown=e=>{if(e.key==="Enter")$("#searchBtn").click()};
+const saved=load("cp_token"); if(saved) login(saved);
+</script>
+</body>
+</html>
