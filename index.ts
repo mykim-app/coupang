@@ -1,37 +1,45 @@
-// Supabase Edge Function: coupang-price
-// 대시보드 > Edge Functions > Deploy a new function > Via Editor 에 통째로 붙여 넣기
+// Supabase Edge Function: coupang-price (v2 — 이메일 + 4자리 숫자)
+// 대시보드 > Edge Functions > coupang-price > Code 에 통째로 붙여 넣고 Deploy
 import { createClient } from "npm:@supabase/supabase-js@2";
+import nodemailer from "npm:nodemailer@6.9.14";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
-
 const env = (k: string) => Deno.env.get(k) ?? "";
 const sb = createClient(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"));
 
-const ADMIN = env("ADMIN_PASSWORD");
 const CRON = env("CRON_SECRET");
-const AK = env("COUPANG_ACCESS_KEY");
-const SK = env("COUPANG_SECRET_KEY");
-const RESEND = env("RESEND_API_KEY");
-const MAIL_FROM = env("MAIL_FROM") || "쿠팡가격알림 <onboarding@resend.dev>";
-const DEFAULT_TO = env("ALERT_EMAIL");
-const HOURLY_LIMIT = Number(env("HOURLY_LIMIT") || 20); // 쿠팡 호출 시간당 상한(안전값)
+const PEPPER = env("PIN_PEPPER");
+const AK = env("COUPANG_ACCESS_KEY"), SK = env("COUPANG_SECRET_KEY");
+const GMAIL_USER = env("GMAIL_USER"), GMAIL_PASS = env("GMAIL_APP_PASSWORD");
+const RESEND = env("RESEND_API_KEY"), MAIL_FROM = env("MAIL_FROM");
+const SITE_URL = env("SITE_URL");
+const HOURLY_LIMIT = Number(env("HOURLY_LIMIT") || 20);   // 쿠팡 호출 시간당 상한
+const BATCH = Number(env("BATCH_PER_RUN") || 15);         // 매시 조회 상품 수
+const STALE_HOURS = Number(env("STALE_HOURS") || 3);      // 이 시간 지난 상품만 재조회
+const MAX_PER_USER = Number(env("MAX_PER_USER") || 10);   // 1인당 등록 상한
 
 const json = (o: unknown, s = 200) =>
   new Response(JSON.stringify(o), { status: s, headers: { ...cors, "Content-Type": "application/json" } });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const won = (n: number | null | undefined) => (n == null ? "-" : n.toLocaleString("ko-KR") + "원");
+const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
+const hasApi = () => !!(AK && SK);
 
-// ---------- 쿠팡 파트너스 API ----------
+async function sha256(s: string) {
+  const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 async function hmacHex(key: string, msg: string) {
-  const k = await crypto.subtle.importKey("raw", new TextEncoder().encode(key),
-    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const k = await crypto.subtle.importKey("raw", new TextEncoder().encode(key), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const sig = await crypto.subtle.sign("HMAC", k, new TextEncoder().encode(msg));
   return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
+
+// ---------- 쿠팡 파트너스 검색 API ----------
 function signedDate() {
   const d = new Date(), p = (n: number) => String(n).padStart(2, "0");
   return `${String(d.getUTCFullYear()).slice(2)}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}T${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}Z`;
@@ -41,104 +49,180 @@ async function callsLastHour() {
   const { count } = await sb.from("cp_api_log").select("id", { count: "exact", head: true }).gte("called_at", since);
   return count ?? 0;
 }
-async function coupangSearch(keyword: string, limit = 10) {
-  if (!AK || !SK) throw new Error("쿠팡 API 키가 아직 등록되지 않았습니다.");
-  if ((await callsLastHour()) >= HOURLY_LIMIT)
-    throw new Error(`쿠팡 API 시간당 호출 상한(${HOURLY_LIMIT}회)에 도달했습니다. 잠시 후 다시 시도하십시오.`);
+async function coupangSearch(keyword: string) {
+  if (!hasApi()) throw new Error("NO_API");
+  if ((await callsLastHour()) >= HOURLY_LIMIT) throw new Error("LIMIT");
   await sb.from("cp_api_log").insert({});
   const path = "/v2/providers/affiliate_open_api/apis/openapi/v1/products/search";
-  const query = `keyword=${encodeURIComponent(keyword)}&limit=${limit}`;
+  const query = `keyword=${encodeURIComponent(keyword)}&limit=10`;
   const dt = signedDate();
   const sig = await hmacHex(SK, dt + "GET" + path + query);
   const r = await fetch(`https://api-gateway.coupang.com${path}?${query}`, {
-    headers: {
-      Authorization: `CEA algorithm=HmacSHA256, access-key=${AK}, signed-date=${dt}, signature=${sig}`,
-      "Content-Type": "application/json;charset=UTF-8",
-    },
+    headers: { Authorization: `CEA algorithm=HmacSHA256, access-key=${AK}, signed-date=${dt}, signature=${sig}`, "Content-Type": "application/json;charset=UTF-8" },
   });
   const j = await r.json().catch(() => ({}));
   if (String(j.rCode) !== "0") throw new Error(`쿠팡 API 오류: ${j.rMessage || j.message || r.status}`);
   return (j.data?.productData ?? []).map((p: any) => ({
-    product_id: String(p.productId),
-    name: p.productName,
-    price: Number(p.productPrice),
-    image: p.productImage,
-    url: p.productUrl,
-    rocket: !!p.isRocket,
+    product_id: String(p.productId), name: p.productName, price: Number(p.productPrice), image: p.productImage, url: p.productUrl,
   }));
 }
-
-// ---------- 메일 ----------
-async function sendMail(to: string, subject: string, html: string) {
-  if (!RESEND) throw new Error("RESEND_API_KEY가 등록되지 않았습니다.");
-  if (!to) throw new Error("받는 메일 주소가 없습니다(ALERT_EMAIL 또는 상품별 메일).");
-  const r = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${RESEND}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: MAIL_FROM, to: [to], subject, html }),
-  });
-  if (!r.ok) throw new Error(`메일 발송 실패: ${await r.text()}`);
+// 상품번호로 찾기: 검색어 결과(상위 10개) 중 같은 상품번호
+async function lookup(productId: string, keyword: string) {
+  const items = await coupangSearch(keyword);
+  return items.find((x: any) => x.product_id === productId) ?? null;
 }
 
-// ---------- 가격 기록 + 알림 판단 ----------
-async function recordPrice(p: any, price: number, source: "api" | "manual") {
-  const prevMin = p.min_price as number | null;
-  const prevLast = p.last_price as number | null;
-  await sb.from("cp_prices").insert({ product_id: p.product_id, price, source });
-
-  const reasons: string[] = [];
-  if (prevMin != null && price < prevMin) reasons.push(`역대 최저가 갱신 (이전 최저 ${won(prevMin)})`);
-  if (p.target_price && price <= p.target_price && (prevLast == null || prevLast > p.target_price))
-    reasons.push(`목표가 ${won(p.target_price)} 이하 도달`);
-
-  const newMin = prevMin == null ? price : Math.min(prevMin, price);
-  let status = "정상";
-  if (reasons.length) {
-    try {
-      await sendMail(p.email || DEFAULT_TO, `[쿠팡 최저가] ${p.name} ${won(price)}`,
-        `<div style="font-family:sans-serif;line-height:1.6">
-          <h2 style="margin:0 0 8px">${p.name}</h2>
-          <p style="font-size:22px;margin:0"><b>${won(price)}</b></p>
-          <ul>${reasons.map((x) => `<li>${x}</li>`).join("")}</ul>
-          <p>직전 가격: ${won(prevLast)}</p>
-          ${p.url ? `<p><a href="${p.url}">쿠팡에서 보기</a></p>` : ""}
-          <p style="color:#888;font-size:12px">이 링크는 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받을 수 있습니다.</p>
-        </div>`);
-      status = "알림 발송";
-    } catch (e) {
-      status = "알림 실패: " + (e as Error).message;
-    }
+// ---------- 메일 (Gmail 우선, 없으면 Resend) ----------
+let transporter: any = null;
+async function sendMail(to: string[], subject: string, html: string) {
+  if (!to.length) return;
+  if (GMAIL_USER && GMAIL_PASS) {
+    transporter ??= nodemailer.createTransport({ host: "smtp.gmail.com", port: 465, secure: true, auth: { user: GMAIL_USER, pass: GMAIL_PASS } });
+    await transporter.sendMail({ from: `쿠팡 가격 알림 <${GMAIL_USER}>`, bcc: to, subject, html });
+    return;
   }
-  await sb.from("cp_products").update({
-    last_price: price, min_price: newMin, last_checked: new Date().toISOString(), last_status: status,
-  }).eq("product_id", p.product_id);
-  return { price, reasons, status };
+  if (RESEND && MAIL_FROM) {
+    const r = await fetch("https://api.resend.com/emails", {
+      method: "POST", headers: { Authorization: `Bearer ${RESEND}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ from: MAIL_FROM, to: [MAIL_FROM.match(/<(.+)>/)?.[1] ?? MAIL_FROM], bcc: to, subject, html }),
+    });
+    if (!r.ok) throw new Error(`메일 발송 실패: ${await r.text()}`);
+    return;
+  }
+  throw new Error("메일 설정(GMAIL_USER·GMAIL_APP_PASSWORD)이 없습니다.");
+}
+function mailBody(p: any, lines: string[]) {
+  return `<div style="font-family:sans-serif;line-height:1.6;max-width:520px">
+    ${p.image ? `<img src="${esc(p.image)}" width="96" style="float:right;margin-left:12px">` : ""}
+    <h3 style="margin:0 0 6px">${esc(p.name)}</h3>
+    ${lines.map((l) => `<p style="margin:4px 0">${l}</p>`).join("")}
+    <p style="margin:10px 0 0;color:#555;font-size:13px">역대 최저 ${won(p.min_price)} · 역대 최고 ${won(p.max_price)} · 상품번호 ${esc(p.product_id)}</p>
+    <p>${p.url ? `<a href="${esc(p.url)}">쿠팡에서 보기</a>` : ""}${SITE_URL ? ` · <a href="${esc(SITE_URL)}">가격 그래프 보기</a>` : ""}</p>
+    <p style="color:#999;font-size:11px;clear:both">쿠팡 링크는 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받을 수 있습니다.</p></div>`;
 }
 
-async function checkAll() {
-  const { data: list } = await sb.from("cp_products").select("*").eq("active", true).order("created_at");
-  const results: any[] = [];
-  if (!AK || !SK) return { skipped: true, message: "쿠팡 API 키 미등록 — 자동 조회를 건너뜁니다.", results };
+// ---------- 가격 반영 ----------
+async function applyPrice(p: any, hit: any) {
+  const changed = p.last_price == null || p.last_price !== hit.price;
+  if (changed) await sb.from("cp_prices").insert({ product_id: p.product_id, price: hit.price });
+  const upd = {
+    name: hit.name || p.name, url: hit.url || p.url, image: hit.image || p.image,
+    last_price: hit.price,
+    min_price: p.min_price == null ? hit.price : Math.min(p.min_price, hit.price),
+    max_price: p.max_price == null ? hit.price : Math.max(p.max_price, hit.price),
+    last_checked: new Date().toISOString(), last_status: "정상",
+  };
+  await sb.from("cp_products").update(upd).eq("product_id", p.product_id);
+  return { changed, prev: p.last_price as number | null, product: { ...p, ...upd } };
+}
+async function markStatus(id: string, status: string) {
+  await sb.from("cp_products").update({ last_checked: new Date().toISOString(), last_status: status }).eq("product_id", id);
+}
+async function subscribers(id: string) {
+  const { data } = await sb.from("cp_subs").select("email").eq("product_id", id);
+  return (data ?? []).map((x: any) => x.email);
+}
+
+// ---------- 매시 자동 조회 ----------
+async function cronRun() {
+  if (!hasApi()) return { skipped: "쿠팡 API 키 미등록" };
+  const stale = new Date(Date.now() - STALE_HOURS * 3600_000).toISOString();
+  const { data: list } = await sb.from("cp_products").select("*")
+    .or(`last_checked.is.null,last_checked.lt.${stale}`).order("last_checked", { ascending: true, nullsFirst: true }).limit(BATCH);
+  const out: any[] = [];
   for (const p of list ?? []) {
     try {
-      const items = await coupangSearch(p.keyword);
-      const hit = items.find((x: any) => x.product_id === p.product_id);
-      if (!hit) {
-        await sb.from("cp_products").update({ last_checked: new Date().toISOString(),
-          last_status: "검색 결과(상위 10개)에 없음 — 검색어 조정 필요" }).eq("product_id", p.product_id);
-        results.push({ product_id: p.product_id, status: "미검출" });
-      } else {
-        if (hit.url || hit.image) await sb.from("cp_products").update({ url: hit.url || p.url, image: hit.image || p.image }).eq("product_id", p.product_id);
-        results.push({ product_id: p.product_id, ...(await recordPrice(p, hit.price, "api")) });
+      const hit = await lookup(p.product_id, p.keyword);
+      if (!hit) { await markStatus(p.product_id, "검색 결과에 없음 — 검색어 확인 필요"); out.push([p.product_id, "미검출"]); }
+      else {
+        const r = await applyPrice(p, hit);
+        if (r.changed && r.prev != null) {
+          const diff = hit.price - r.prev, up = diff > 0;
+          const low = hit.price <= (p.min_price ?? Infinity);
+          await sendMail(await subscribers(p.product_id),
+            `[쿠팡 가격${up ? "↑" : "↓"}] ${r.product.name.slice(0, 40)} ${won(hit.price)}${low ? " (역대 최저)" : ""}`,
+            mailBody(r.product, [
+              `<b style="font-size:20px">${won(hit.price)}</b> <span style="color:${up ? "#c0392b" : "#1a7f37"}">${up ? "▲" : "▼"} ${won(Math.abs(diff))}</span>`,
+              `직전 가격 ${won(r.prev)}${low ? " · <b>역대 최저가</b>" : ""}`,
+            ])).catch((e) => markStatus(p.product_id, "메일 실패: " + e.message));
+        }
+        out.push([p.product_id, r.changed ? "변동" : "동일"]);
       }
     } catch (e) {
-      const msg = (e as Error).message;
-      results.push({ product_id: p.product_id, status: "오류: " + msg });
-      if (msg.includes("상한")) break;
+      const m = (e as Error).message;
+      if (m === "LIMIT") { out.push(["-", "시간당 상한 도달, 다음 시간에 계속"]); break; }
+      await markStatus(p.product_id, "오류: " + m); out.push([p.product_id, m]);
     }
     await sleep(2500);
   }
-  return { skipped: false, results };
+  return { checked: out };
+}
+
+// ---------- 로그인 ----------
+async function login(emailRaw: string, pin: string) {
+  const email = String(emailRaw || "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json({ error: "이메일 형식이 올바르지 않습니다." }, 400);
+  if (!/^\d{4}$/.test(String(pin))) return json({ error: "숫자 4자리를 입력하십시오." }, 400);
+  const hash = await sha256(`${PEPPER}|${email}|${pin}`);
+  const { data: u } = await sb.from("cp_users").select("*").eq("email", email).maybeSingle();
+  let isNew = false;
+  if (!u) {
+    await sb.from("cp_users").insert({ email, pin_hash: hash });
+    isNew = true;
+  } else {
+    if (u.locked_until && new Date(u.locked_until) > new Date())
+      return json({ error: "입력 오류가 많아 10분간 잠겼습니다. 잠시 후 다시 시도하십시오." }, 429);
+    if (u.pin_hash !== hash) {
+      const fc = (u.fail_count ?? 0) + 1;
+      await sb.from("cp_users").update(fc >= 5 ? { fail_count: 0, locked_until: new Date(Date.now() + 600_000).toISOString() } : { fail_count: fc }).eq("email", email);
+      return json({ error: `숫자 4자리가 맞지 않습니다. (${fc >= 5 ? "10분간 잠금" : `${fc}/5회`})` }, 401);
+    }
+    await sb.from("cp_users").update({ fail_count: 0, locked_until: null }).eq("email", email);
+  }
+  const token = crypto.randomUUID() + crypto.randomUUID().replace(/-/g, "");
+  await sb.from("cp_sessions").insert({ token, email, expires_at: new Date(Date.now() + 30 * 86400_000).toISOString() });
+  return json({ token, email, isNew });
+}
+async function sessionEmail(token: string) {
+  if (!token) return null;
+  const { data } = await sb.from("cp_sessions").select("email,expires_at").eq("token", token).maybeSingle();
+  if (!data || new Date(data.expires_at) < new Date()) return null;
+  return data.email as string;
+}
+
+// ---------- 상품 등록 ----------
+async function addProduct(email: string, rawId: string, keywordRaw: string) {
+  const productId = String(rawId || "").match(/products\/(\d+)/)?.[1] ?? String(rawId || "").replace(/\D/g, "");
+  const keyword = String(keywordRaw || "").trim();
+  if (!productId) return json({ error: "쿠팡 상품번호(또는 상품 주소)를 입력하십시오." }, 400);
+  if (!keyword) return json({ error: "검색어(상품명)를 입력하십시오. 쿠팡 API는 상품번호만으로 조회할 수 없습니다." }, 400);
+  const { count } = await sb.from("cp_subs").select("product_id", { count: "exact", head: true }).eq("email", email);
+  if ((count ?? 0) >= MAX_PER_USER) return json({ error: `1인당 ${MAX_PER_USER}개까지 등록할 수 있습니다.` }, 400);
+
+  let { data: p } = await sb.from("cp_products").select("*").eq("product_id", productId).maybeSingle();
+  let note = "";
+  if (!p) {
+    let hit: any = null;
+    if (hasApi()) {
+      try { hit = await lookup(productId, keyword); }
+      catch (e) { note = (e as Error).message === "LIMIT" ? "조회 한도로 다음 자동 조회 때 확인합니다." : (e as Error).message; }
+      if (!hit && !note) return json({ error: "검색어로 찾은 상위 10개 상품 중에 이 상품번호가 없습니다. 검색어를 더 구체적으로(브랜드·용량 포함) 바꿔 보십시오." }, 404);
+    } else note = "쿠팡 API 키 등록 전이라 가격은 키 등록 후 자동 조회됩니다.";
+    await sb.from("cp_products").insert({ product_id: productId, name: hit?.name || keyword, keyword, url: `https://www.coupang.com/vp/products/${productId}`, last_status: hit ? "정상" : "조회 대기" });
+    ({ data: p } = await sb.from("cp_products").select("*").eq("product_id", productId).single());
+    if (hit) ({ product: p } = await applyPrice(p, hit));
+  }
+  const { error } = await sb.from("cp_subs").upsert({ email, product_id: productId });
+  if (error) throw error;
+
+  // 최초 등록 메일
+  let mailNote = "";
+  try {
+    await sendMail([email], `[쿠팡 가격 알림] 등록 완료 — ${p.name.slice(0, 40)}`,
+      mailBody(p, [p.last_price != null ? `현재 가격 <b style="font-size:20px">${won(p.last_price)}</b>` : `현재 가격: ${esc(note || "조회 대기")}`,
+        "앞으로 가격이 바뀌면 이 주소로 알려 드립니다."]));
+  } catch (e) { mailNote = " (등록 메일 발송 실패: " + (e as Error).message + ")"; }
+  return json({ ok: true, note: note + mailNote });
 }
 
 // ---------- 진입점 ----------
@@ -146,66 +230,39 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   try {
     const b = await req.json().catch(() => ({}));
-    const a = b.action as string;
-    if (!ADMIN) return json({ error: "ADMIN_PASSWORD가 설정되지 않았습니다." }, 500);
-    const okAdmin = b.token === ADMIN;
-    const okCron = a === "check" && CRON && b.token === CRON;
-    if (!okAdmin && !okCron) return json({ error: "비밀번호가 올바르지 않습니다." }, 401);
+    if (b.action === "cron") {
+      if (!CRON || b.token !== CRON) return json({ error: "unauthorized" }, 401);
+      return json(await cronRun());
+    }
+    if (b.action === "login") return await login(b.email, b.pin);
 
-    switch (a) {
-      case "ping":
-        return json({ ok: true, hasApiKey: !!(AK && SK), hasMail: !!RESEND, defaultEmail: DEFAULT_TO ? DEFAULT_TO.replace(/(.{2}).+(@.+)/, "$1***$2") : "" });
+    const email = await sessionEmail(b.token);
+    if (!email) return json({ error: "다시 로그인하십시오.", relogin: true }, 401);
+
+    switch (b.action) {
       case "list": {
-        const { data, error } = await sb.from("cp_products").select("*").order("created_at");
-        if (error) throw error;
-        return json({ items: data });
+        const { data: subs } = await sb.from("cp_subs").select("product_id,created_at").eq("email", email).order("created_at");
+        const ids = (subs ?? []).map((s: any) => s.product_id);
+        const { data: prods } = ids.length ? await sb.from("cp_products").select("*").in("product_id", ids) : { data: [] };
+        const { data: hist } = ids.length ? await sb.from("cp_prices").select("product_id,price,checked_at").in("product_id", ids).order("checked_at") : { data: [] };
+        const items = ids.map((id: string) => ({ ...(prods ?? []).find((p: any) => p.product_id === id), history: (hist ?? []).filter((h: any) => h.product_id === id).map((h: any) => ({ price: h.price, t: h.checked_at })) })).filter((x: any) => x.product_id);
+        return json({ email, hasApi: hasApi(), maxPerUser: MAX_PER_USER, items });
       }
-      case "history": {
-        const { data, error } = await sb.from("cp_prices").select("price,source,checked_at")
-          .eq("product_id", b.product_id).order("checked_at");
-        if (error) throw error;
-        return json({ items: data });
-      }
-      case "search":
-        return json({ items: await coupangSearch(String(b.keyword || "").trim()) });
-      case "add": {
-        const p = b.product ?? {};
-        if (!p.product_id || !p.name) return json({ error: "상품번호와 상품명은 필수입니다." }, 400);
-        const row = {
-          product_id: String(p.product_id), name: p.name, keyword: p.keyword || p.name,
-          url: p.url || null, image: p.image || null,
-          target_price: p.target_price ? Number(p.target_price) : null, email: p.email || null,
-        };
-        const { error } = await sb.from("cp_products").upsert(row);
-        if (error) throw error;
-        if (p.price) {
-          const { data: cur } = await sb.from("cp_products").select("*").eq("product_id", row.product_id).single();
-          await recordPrice(cur, Number(p.price), p.source === "api" ? "api" : "manual");
-        }
+      case "add":
+        return await addProduct(email, b.product_id, b.keyword);
+      case "update_keyword": {
+        await sb.from("cp_subs").select("product_id").eq("email", email).eq("product_id", b.product_id).single().then(({ error }) => { if (error) throw new Error("등록되지 않은 상품입니다."); });
+        await sb.from("cp_products").update({ keyword: String(b.keyword || "").trim(), last_checked: null, last_status: "검색어 변경 — 다음 자동 조회 대기" }).eq("product_id", b.product_id);
         return json({ ok: true });
       }
-      case "update": {
-        const f: any = {};
-        for (const k of ["name", "keyword", "email", "active"]) if (k in b) f[k] = b[k] === "" ? null : b[k];
-        if ("target_price" in b) f.target_price = b.target_price ? Number(b.target_price) : null;
-        const { error } = await sb.from("cp_products").update(f).eq("product_id", b.product_id);
-        if (error) throw error;
+      case "remove": {
+        await sb.from("cp_subs").delete().eq("email", email).eq("product_id", b.product_id);
+        const { count } = await sb.from("cp_subs").select("email", { count: "exact", head: true }).eq("product_id", b.product_id);
+        if (!count) await sb.from("cp_products").delete().eq("product_id", b.product_id);
         return json({ ok: true });
       }
-      case "delete": {
-        const { error } = await sb.from("cp_products").delete().eq("product_id", b.product_id);
-        if (error) throw error;
-        return json({ ok: true });
-      }
-      case "manual": {
-        const { data: p, error } = await sb.from("cp_products").select("*").eq("product_id", b.product_id).single();
-        if (error) throw error;
-        return json(await recordPrice(p, Number(b.price), "manual"));
-      }
-      case "check":
-        return json(await checkAll());
-      case "testmail":
-        await sendMail(b.email || DEFAULT_TO, "[쿠팡 가격 알림] 테스트 메일", "<p>메일 설정이 정상입니다.</p>");
+      case "logout":
+        await sb.from("cp_sessions").delete().eq("token", b.token);
         return json({ ok: true });
       default:
         return json({ error: "알 수 없는 요청입니다." }, 400);
