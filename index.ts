@@ -198,6 +198,9 @@ async function sessionEmail(token: string) {
 async function parseProduct(raw: string): Promise<{ id: string; url: string } | { error: string }> {
   let s = String(raw || "").trim();
   if (/^\d{5,}$/.test(s)) return { id: s, url: `https://www.coupang.com/vp/products/${s}` };
+  // 상품 페이지의 "쿠팡상품번호: 9145532845 - 26924074730" 형식 (상품번호 - 옵션번호[ - 판매자옵션번호])
+  const m = s.replace(/^.*?(?=\d)/, "").match(/^(\d{5,})\s*[-–—~]\s*(\d{5,})(?:\s*[-–—~]\s*(\d{5,}))?\s*$/);
+  if (m) return { id: m[1], url: `https://www.coupang.com/vp/products/${m[1]}?itemId=${m[2]}${m[3] ? `&vendorItemId=${m[3]}` : ""}` };
   if (/^(https?:\/\/)?(link\.coupang\.com|coupa\.ng)\//i.test(s)) {           // 짧은 주소 → 실제 주소 따라가기
     let u = s.startsWith("http") ? s : "https://" + s;
     for (let i = 0; i < 4 && !/\/vp\/products\/\d+|[?&]pageKey=\d+/.test(u); i++) {
